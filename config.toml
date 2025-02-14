@@ -1,8 +1,8 @@
 [theme]
-primaryColor="#2e7d32"  # Verde oscuro para tema ambiental
-backgroundColor="#f8f9fa"
-secondaryBackgroundColor="#e9ecef"
-textColor="#212529"
+primaryColor="#e3d386"  # Verde oscuro para tema ambiental
+backgroundColor="#ed243b"
+secondaryBackgroundColor="#eb6a58"
+textColor="#000000"
 
 [server]
 enableCORS=false
