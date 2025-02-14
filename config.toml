@@ -1,0 +1,15 @@
+[theme]
+primaryColor="#2e7d32"  # Verde oscuro para tema ambiental
+backgroundColor="#f8f9fa"
+secondaryBackgroundColor="#e9ecef"
+textColor="#212529"
+
+[server]
+enableCORS=false
+enableXsrfProtection=true
+
+[browser]
+gatherUsageStats=false
+
+[phases]
+start = "python app.py"
