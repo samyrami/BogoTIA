@@ -23,7 +23,11 @@ if API_KEY is None:
     st.error("Error: OPENAI_API_KEY not found in environment variables")
     st.stop()
     
-st.set_page_config(page_title="BogoTIA", layout="centered")
+st.set_page_config(page_title="BogotAI", layout="centered", menu_items= {
+        'Get Help': 'https://www.extremelycoolapp.com/help',
+        'Report a bug': "https://www.extremelycoolapp.com/bug",
+        'About': "# This is a header. This is an *extremely* cool app!"
+    })
 
 class MunicipalDocumentProcessor:
     def __init__(self, pdf_directory="data", index_directory="faiss_index"):
@@ -142,25 +146,32 @@ class StreamHandler(BaseCallbackHandler):
         self.container.markdown(self.text)
 
 def get_municipal_context(vector_store, query):
-    """Obtiene el contexto municipal relevante para una consulta"""
-    similar_docs = vector_store.similarity_search(query, k=5)
-    context = []
+    """
+    Obtiene el contexto relevante de los documentos para una consulta.
+    """
+    similar_docs = vector_store.similarity_search(query, k=3)
+    context_list = []
     
     for doc in similar_docs:
+        # Extraer información básica del documento
         content = doc.page_content
-        source = doc.metadata.get('source', 'Documento desconocido')
-        page = doc.metadata.get('page', 'N/A')
+        source = doc.metadata.get('source', 'Documento sin especificar')
         
-        # Extraer referencias específicas
-        refs = re.findall(r'(?:Acuerdo|Decreto|Resolución|Plan)\s+\d+[^\n]*', content)
+        # Extraer datos cuantitativos
+        numbers = re.findall(r'(\d+(?:\.\d+)?(?:%|\s+(?:habitantes|personas|viviendas)))', content)
+        metrics = numbers[:3] if numbers else []
         
-        context.append({
-            'source': f"{source} (Pág. {page})",
-            'content': content,
-            'refs': refs
+        # Extraer referencias a políticas, programas o indicadores
+        refs = re.findall(r'(?:Plan|Programa|Proyecto|Meta|Indicador)[\s:].*?(?=\n|$)', content)
+        
+        context_list.append({
+            'source': source,
+            'content': content[:300],  # Limitar longitud del contenido
+            'metrics': metrics,
+            'refs': refs[:3]  # Limitar número de referencias
         })
     
-    return context
+    return context_list
 
 SYSTEM_PROMPT = """
 Eres BogotAI, un asistente especializado para apoyar al equipo de la Alcaldía de Bogotá. Tu función es proporcionar información precisa y análisis basados en datos para apoyar la toma de decisiones.
@@ -289,275 +300,122 @@ Para cada consulta, estructura tu respuesta así:
 - Especifica cuando las recomendaciones sean preliminares
 - Sugiere la consulta con expertos cuando sea necesaria  
 - Si no tienes informacion sobre algo en especifico, responde con que no tienes suficiente informacion sobre eso o neesitas mas informacion sobre eso. 
-- SIEMPRE RESPONDE EN ESPAÑOL 
+- SIEMPRE RESPONDE EN ESPAÑOL  
+- Si te saludan "Hola BogotAI" o preguntan quien eres respondeles de manera concisas diciendo quien ers y en que puedes ayudarlos. 
 
 Recuerda: Tu rol es apoyar la toma de decisiones proporcionando información y análisis basado en evidencia, no tomar las decisiones finales.
 """
 
 def detect_response_format(prompt):
-    """Detecta el formato de respuesta más apropiado basado en la consulta"""
-    # Keywords que sugieren una respuesta estructurada
-    structured_keywords = [
-        {
-        'ANALISIS_INDICADORES': [
-            'densidad', 'población', 'indicador', 'tasa', 'porcentaje', 
-            'estadística', 'medición', 'cifras', 'datos', 'evolución',
-            'tendencia', 'comparación', 'crecimiento', 'disminución'
-        ],
+    """
+    Detecta si una consulta requiere una respuesta estructurada o simple.
+    Retorna un string con el formato detectado.
+    
+    Parameters:
+    prompt (str): La consulta del usuario
+    
+    Returns:
+    str: 'STRUCTURED' o 'SIMPLE'
+    """
+    prompt = prompt.lower()
+    
+    # Indicadores de consulta estructurada
+    structured_indicators = [
+        # Análisis y comparación
+        'analizar', 'comparar', 'evaluar', 'diferencia',
+        'evolución', 'tendencia', 'impacto',
         
-        'ANALISIS_TERRITORIAL': [
-            'localidad', 'upz', 'barrio', 'zona', 'territorio',
-            'rural', 'urbano', 'región', 'metropolitana', 'distrito',
-            'centro poblado', 'área', 'sector', 'comuna'
-        ],
+        # Planeación y gestión
+        'plan', 'programa', 'proyecto', 'estrategia',
+        'política', 'presupuesto', 'implementación',
         
-        'PLAN_GOBIERNO': [
-            'programa', 'proyecto', 'iniciativa', 'política', 'plan',
-            'estrategia', 'meta', 'objetivo', 'presupuesto', 'inversión',
-            'implementación', 'ejecución', 'seguimiento', 'evaluación'
-        ],
+        # Territorio y datos
+        'localidad', 'territorio', 'zona', 'sector',
+        'estadística', 'indicador', 'porcentaje', 'densidad',
         
-        'SERVICIOS_CIUDADANOS': [
-            'trámite', 'servicio', 'atención', 'procedimiento', 'requisitos',
-            'documentos', 'solicitud', 'petición', 'reclamo', 'consulta',
-            'proceso', 'gestión'
-        ],
-        
-        'TEMAS_PRIORITARIOS': {
-            'seguridad': [
-                'crimen', 'delito', 'seguridad', 'convivencia', 'policía',
-                'vigilancia', 'prevención', 'hurto', 'violencia'
-            ],
-            'movilidad': [
-                'transporte', 'metro', 'transmilenio', 'vía', 'calle',
-                'avenida', 'ciclovía', 'peatón', 'tráfico', 'congestión'
-            ],
-            'social': [
-                'pobreza', 'educación', 'salud', 'vivienda', 'empleo',
-                'inclusión', 'equidad', 'vulnerable', 'comunidad'
-            ],
-            'ambiente': [
-                'ambiente', 'contaminación', 'residuos', 'reciclaje',
-                'verde', 'sostenible', 'clima', 'agua', 'aire'
-            ]
-        }
-    }
+        # Temáticas complejas
+        'seguridad', 'movilidad', 'pobreza', 'desarrollo',
+        'infraestructura', 'ambiente', 'educación', 'salud'
     ]
     
-    # Keywords que sugieren una respuesta simple
-    simple_keywords = [
-        # Preguntas básicas de información
-        'qué es', 'que es',           # Para definiciones
-        'dónde', 'donde',             # Para ubicaciones
-        'cuándo', 'cuando',           # Para fechas/horarios
-        'quién', 'quien',             # Para responsables
-        'cuál', 'cual',               # Para opciones
-        'cuánto', 'cuanto',           # Para valores/cantidades
+    # Indicadores de consulta simple
+    simple_indicators = [
+        # Preguntas básicas
+        'qué es', 'que es', 'dónde', 'donde', 'cuándo', 'cuando',
+        'quién', 'quien', 'cuál', 'cual', 'cuánto', 'cuanto',
         
-        # Consultas de datos puntuales
-        'valor',                      # Para cifras específicas
-        'tasa',                       # Para indicadores simples
-        'número',                     # Para cantidades
-        'porcentaje',                 # Para proporciones
-        'dato',                       # Para información puntual
-        'cifra',                      # Para estadísticas simples
-        
-        # Ubicación y acceso
-        'dirección',                  # Para localización
-        'horario',                    # Para tiempos de atención
-        'teléfono',                   # Para contacto
-        'sede',                       # Para puntos de atención
-        'punto',                      # Para ubicaciones de servicio
-        'oficina',                    # Para lugares administrativos
-        
-        # Definiciones y conceptos
-        'define',                     # Para conceptos
-        'significa',                  # Para términos técnicos
-        'explica',                    # Para aclaraciones
-        'descripción',                # Para caracterizaciones breves
-        'concepto',                   # Para definiciones formales
-        
-        # Estados y situaciones
-        'estado',                     # Para situación actual
-        'vigente',                    # Para validez actual
-        'disponible',                 # Para disponibilidad
-        'abierto',                    # Para estado de servicio
-        'activo',                     # Para estado de operación
-        
-        # Información básica de servicios
-        'costo',                      # Para valores de servicios
-        'tarifa',                     # Para precios
-        'requisito',                  # Para requerimientos básicos
-        'documento',                  # Para papeles necesarios
-        'plazo',                      # Para tiempos límite
-        
-        # Consultas de responsabilidad
-        'encargado',                  # Para responsables
-        'responsable',                # Para asignación de tareas
-        'autoridad',                  # Para competencia
-        'competente',                 # Para jurisdicción
-        'atiende'                     # Para servicio al ciudadano
+        # Definiciones y datos puntuales
+        'significa', 'define', 'explica', 'valor', 'dato',
+        'horario', 'dirección', 'teléfono', 'requisito'
     ]
     
-    prompt_lower = prompt.lower()
+    # Criterios de complejidad
+    is_complex = (
+        len(prompt.split()) > 15 or              # Longitud de la pregunta
+        prompt.count('?') > 1 or                 # Múltiples preguntas
+        prompt.count(',') > 1 or                 # Múltiples elementos
+        prompt.count(' y ') > 1 or              # Múltiples conceptos
+        any(ind in prompt for ind in structured_indicators)  # Indicadores de estructura
+    )
     
-    # Detectar si la pregunta es compleja por su longitud
-    is_complex = len(prompt.split()) > 15
+    # Criterios de simplicidad
+    is_simple = (
+        any(ind in prompt for ind in simple_indicators) and  # Indicadores simples
+        not is_complex                                       # No es compleja
+    )
     
-    # Detectar si contiene múltiples preguntas
-    has_multiple_questions = prompt.count('?') > 1
-    
-    # Determinar el formato basado en las condiciones
-    if has_multiple_questions or any(keyword in prompt_lower for keyword in structured_keywords):
-        return 'STRUCTURED'
-    elif any(keyword in prompt_lower for keyword in simple_keywords) and not is_complex:
-        return 'SIMPLE'
-    else:
-        return 'STRUCTURED'
+    return 'SIMPLE' if is_simple else 'STRUCTURED'
 
 def format_structured_response(query_type, context):
     """
-    Genera un prompt para respuesta estructurada adaptado al contexto 
-    de la Alcaldía de Bogotá.
-    
-    Parameters:
-    query_type (str): Tipo de consulta (política, indicador, territorial, etc.)
-    context (str): Contexto específico de la consulta
-    
-    Returns:
-    str: Prompt estructurado para la respuesta
+    Formatea una respuesta estructurada seleccionando secciones relevantes
+    según el tipo de consulta.
     """
-    
-    # Definir formatos específicos según el tipo de consulta
-    formats = {
-        'politica_publica': """
-    Tipo de consulta: {query_type}
-    
-    📋 RESUMEN EJECUTIVO:
-    • [Síntesis de la política/programa]
-    
-    🎯 OBJETIVOS Y ALCANCE:
-    • [Objetivos principales]
-    • [Población objetivo]
-    • [Cobertura territorial]
-    
-    📊 INDICADORES CLAVE:
-    • [Métricas de seguimiento]
-    • [Estado actual]
-    • [Metas establecidas]
-    
-    📍 ANÁLISIS TERRITORIAL:
-    • [Impacto por localidades]
-    • [Brechas identificadas]
-    • [Priorización territorial]
-    
-    💰 RECURSOS Y PRESUPUESTO:
-    • [Asignación presupuestal]
-    • [Fuentes de financiación]
-    • [Ejecución actual]
-    
-    📅 CRONOGRAMA:
-    • [Estado de implementación]
-    • [Próximos hitos]
-    • [Fechas clave]
-    """,
-        
-        'indicador_gestion': """
-    Tipo de consulta: {query_type}
-    
-    📊 DATO ACTUAL:
-    • [Valor más reciente]
-    • [Fecha de medición]
-    • [Fuente del dato]
-    
-    📈 EVOLUCIÓN HISTÓRICA:
-    • [Tendencia]
-    • [Variaciones significativas]
-    • [Comparativo anual]
-    
-    🗺️ ANÁLISIS ESPACIAL:
-    • [Distribución por localidades]
-    • [Zonas críticas]
-    • [Patrones territoriales]
-    
-    🎯 METAS Y BRECHAS:
-    • [Objetivo establecido]
-    • [Brecha actual]
-    • [Factores críticos]
-    
-    📋 RECOMENDACIONES:
-    • [Acciones sugeridas]
-    • [Prioridades]
-    • [Alertas tempranas]
-    """,
-        
-        'proyecto_territorial': """
-    Tipo de consulta: {query_type}
-    
-    📍 LOCALIZACIÓN:
-    • [Ubicación específica]
-    • [Área de influencia]
-    • [Población beneficiada]
-    
-    📊 DIAGNÓSTICO:
-    • [Situación actual]
-    • [Problemáticas identificadas]
-    • [Potencialidades]
-    
-    🎯 INTERVENCIÓN:
-    • [Acciones propuestas]
-    • [Componentes del proyecto]
-    • [Articulación institucional]
-    
-    📅 IMPLEMENTACIÓN:
-    • [Fases del proyecto]
-    • [Cronograma]
-    • [Hitos clave]
-    
-    💰 INVERSIÓN:
-    • [Presupuesto asignado]
-    • [Fuentes de recursos]
-    • [Estado de ejecución]
-    """
+    # Definir todas las secciones posibles con sus emojis y contenido
+    sections = {
+        'resumen': ('📋', 'RESUMEN EJECUTIVO', ['Síntesis del tema', 'Puntos clave', 'Contexto general']),
+        'objetivos': ('🎯', 'OBJETIVOS Y ALCANCE', ['Objetivos principales', 'Población objetivo', 'Cobertura']),
+        'indicadores': ('📊', 'INDICADORES CLAVE', ['Estado actual', 'Evolución', 'Metas']),
+        'territorial': ('📍', 'ANÁLISIS TERRITORIAL', ['Impacto por localidades', 'Zonas críticas', 'Distribución']),
+        'recursos': ('💰', 'RECURSOS Y PRESUPUESTO', ['Presupuesto', 'Fuentes', 'Ejecución']),
+        'implementacion': ('📅', 'IMPLEMENTACIÓN', ['Estado actual', 'Cronograma', 'Hitos']),
+        'recomendaciones': ('⚡', 'RECOMENDACIONES', ['Acciones sugeridas', 'Prioridades', 'Seguimiento']),
+        'normativo': ('⚖️', 'MARCO NORMATIVO', ['Normativa aplicable', 'Competencias', 'Requisitos']),
+        'actores': ('👥', 'ACTORES CLAVE', ['Responsables', 'Aliados', 'Grupos de interés'])
     }
+
+    # Mapear tipos de consulta a secciones relevantes
+    type_sections = {
+        'SEGURIDAD_MOVILIDAD': ['resumen', 'indicadores', 'territorial', 'implementacion', 'recomendaciones'],
+        'EQUIDAD_SOCIAL': ['resumen', 'objetivos', 'indicadores', 'recursos', 'recomendaciones'],
+        'PLANEACION_TERRITORIO': ['resumen', 'objetivos', 'territorial', 'implementacion', 'normativo'],
+        'GESTION_RECURSOS': ['resumen', 'recursos', 'indicadores', 'implementacion', 'actores'],
+        'AMBIENTE_DESARROLLO': ['resumen', 'objetivos', 'territorial', 'implementacion', 'recomendaciones'],
+        'SERVICIOS_CIUDADANOS': ['resumen', 'objetivos', 'normativo', 'actores', 'recomendaciones']
+    }
+
+    # Obtener secciones relevantes para el tipo de consulta
+    relevant_sections = type_sections.get(query_type, ['resumen', 'recomendaciones'])
+
+    # Construir el prompt
+    prompt_parts = [f"Tipo de consulta: {query_type}\n"]
     
-    # Seleccionar formato base según el tipo de consulta
-    base_format = formats.get(query_type, formats['politica_publica'])
-    
-    # Agregar contexto común para todas las consultas
-    common_context = """
-    🔗 ALINEACIÓN PLAN DE DESARROLLO:
-    • [Eje estratégico]
-    • [Programa relacionado]
-    • [Metas asociadas]
-    
-    ⚖️ MARCO NORMATIVO:
-    • [Normativa aplicable]
-    • [Competencias]
-    • [Requisitos legales]
-    
-    👥 ACTORES CLAVE:
-    • [Entidades responsables]
-    • [Aliados estratégicos]
-    • [Grupos de interés]
-    
-    ⚠️ ALERTAS Y CONSIDERACIONES:
-    • [Riesgos identificados]
-    • [Factores críticos]
-    • [Aspectos a monitorear]
-    """
-    
-    # Construir respuesta final
-    full_response = f"""
-    {base_format}
-    
-    {common_context}
-    
-    Contexto específico:
-    {context}
-    """
-    
-    return full_response.format(query_type=query_type)
+    # Agregar contexto si existe
+    if context:
+        prompt_parts.append(f"Contexto relevante:\n{context}\n")
+
+    # Agregar secciones relevantes
+    for section_key in relevant_sections:
+        if section_key in sections:
+            emoji, title, bullets = sections[section_key]
+            prompt_parts.append(f"""
+{emoji} {title}:
+• {bullets[0]}
+• {bullets[1]}
+• {bullets[2]}
+""")
+
+    return "\n".join(prompt_parts)
 
 def format_simple_response(query_type, context):
     """Genera un prompt para respuesta simple"""
@@ -571,21 +429,38 @@ def format_simple_response(query_type, context):
     La respuesta debe ser directa y enfocada en responder la pregunta específica.
     """
 
-def format_municipal_context(context):
-    """Formatea el contexto municipal para el prompt"""
-    formatted = []
-    for item in context:
-        refs = '\n'.join(f"• {ref}" for ref in item['refs']) if item['refs'] else "No se encontraron referencias específicas"
-        formatted.append(f"""
-        📚 Fuente: {item['source']}
+def format_municipal_context(context_list):
+    """
+    Formatea el contexto municipal para presentación.
+    """
+    if not isinstance(context_list, list):
+        return "No se encontró contexto relevante."
         
-        📋 Referencias:
-        {refs}
+    formatted_parts = []
+    
+    for item in context_list:
+        # Formatear referencias
+        refs = item.get('refs', [])
+        refs_text = "\n• ".join(refs) if refs else "No hay referencias específicas"
         
-        💡 Contexto relevante:
-        {item['content'][:500]}...
-        """)
-    return '\n'.join(formatted)
+        # Formatear métricas
+        metrics = item.get('metrics', [])
+        metrics_text = "\n• ".join(metrics) if metrics else "No hay datos cuantitativos específicos"
+        
+        section = f"""
+📚 Fuente: {item['source']}
+
+📊 Datos clave:
+• {metrics_text}
+
+📋 Referencias:
+• {refs_text}
+
+💡 Contexto relevante:
+{item['content']}"""
+        formatted_parts.append(section)
+    
+    return "\n---\n".join(formatted_parts)
 
 def detect_query_type(prompt):
     """
@@ -662,36 +537,72 @@ def detect_query_type(prompt):
             return category
     return 'GENERAL'
 
+def format_context_string(context_list):
+    """
+    Formatea la lista de contextos en un string estructurado.
+    """
+    if not context_list:
+        return "No se encontró contexto relevante."
+        
+    formatted_parts = []
+    
+    for item in context_list:
+        section = f"""
+📚 Fuente: {item['source']}
+
+📊 Datos relevantes:
+{format_metrics(item.get('metrics', []))}
+
+📋 Referencias:
+{format_references(item.get('refs', []))}
+
+💡 Contexto:
+{item['content']}"""
+        formatted_parts.append(section)
+    
+    return "\n---\n".join(formatted_parts)
+
+def format_metrics(metrics):
+    if not metrics:
+        return "• No hay datos cuantitativos específicos"
+    return "\n".join(f"• {metric}" for metric in metrics)
+
+def format_references(refs):
+    if not refs:
+        return "• No hay referencias específicas"
+    return "\n".join(f"• {ref}" for ref in refs)
+
 def get_chat_response(prompt, vector_store, temperature=0.3):
     """Genera respuesta considerando el contexto municipal y el formato apropiado"""
     try:
         response_placeholder = st.empty()
         stream_handler = StreamHandler(response_placeholder)
         
-        # Detectar tipo de consulta y formato de respuesta
+        # 1. Detectar tipo de consulta
         query_type = detect_query_type(prompt)
-        response_format = detect_response_format(prompt)
-        municipal_context = get_municipal_context(vector_store, prompt)
         
-        # Seleccionar el formato de prompt según el tipo de respuesta
-        if response_format == 'STRUCTURED':
-            enhanced_prompt = format_structured_response(
-                query_type, 
-                format_municipal_context(municipal_context)
-            )
-        else:
-            enhanced_prompt = format_simple_response(
-                query_type, 
-                format_municipal_context(municipal_context)
-            )
+        # 2. Obtener y formatear contexto
+        context_items = get_municipal_context(vector_store, prompt)
+        formatted_context = format_context_string(context_items)
         
-        # Ajustar la temperatura según el formato
-        # Menor temperatura para respuestas estructuradas, mayor para respuestas simples
-        adjusted_temperature = 0.3 if response_format == 'STRUCTURED' else 0.7
+        # 3. Construir prompt mejorado
+        enhanced_prompt = f"""
+Tipo de consulta: {query_type}
+
+Contexto relevante:
+{formatted_context}
+
+Por favor proporciona una respuesta que:
+1. Use la información del contexto proporcionado
+2. Cite las fuentes específicas cuando sea posible
+3. Destaque datos cuantitativos relevantes
+4. Proporcione recomendaciones basadas en evidencia
+"""
         
+        # 4. Generar respuesta
         chat_model = ChatOpenAI(
-            model="gpt-4o",
-            temperature=adjusted_temperature,
+            model="gpt-4",
+            temperature=temperature,
             api_key=API_KEY,
             streaming=True,
             callbacks=[stream_handler]
@@ -708,7 +619,6 @@ def get_chat_response(prompt, vector_store, temperature=0.3):
     except Exception as e:
         st.error(f"Error generando respuesta: {str(e)}")
         return "Lo siento, ocurrió un error al procesar su solicitud."
-
 def main():
     processor = MunicipalDocumentProcessor()
     
@@ -723,21 +633,21 @@ def main():
         st.stop()
 
     st.write(logo, unsafe_allow_html=True)
-    st.title("BogoTIA", anchor=False)
-    st.markdown("**Asistente virtual para gestión municipal y administración pública**")
+    st.title("BogotAI", anchor=False)
+    st.markdown("##### Asistente para la toma de decisiones de política pública")
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
     with st.sidebar:
         st.markdown("""
-        **Sistema de Gestión Municipal**
+        ## Sistema de Gestión Pública Bogotá
         
-        Tipos de consultas:
-        - Planes y proyectos
-        - Gestión administrativa
-        - Procedimientos internos
-        - Control y seguimiento
+        **Tipos de consultas:**
+        - Planificación y diseño de Políticas Públicas 
+        - Análisis de problemas sociales 
+        - Evaluación de escenarios 
+        - Identificación de patrones y tendencias 
         """)
         
     for message in st.session_state.messages:
