@@ -23,7 +23,11 @@ if API_KEY is None:
     st.error("Error: OPENAI_API_KEY not found in environment variables")
     st.stop()
     
-st.set_page_config(page_title="BogoTIA", layout="centered")
+st.set_page_config(page_title="BogotAI", layout="centered", menu_items= {
+        'Get Help': 'https://www.extremelycoolapp.com/help',
+        'Report a bug': "https://www.extremelycoolapp.com/bug",
+        'About': "# This is a header. This is an *extremely* cool app!"
+    })
 
 class MunicipalDocumentProcessor:
     def __init__(self, pdf_directory="data", index_directory="faiss_index"):
@@ -143,72 +147,31 @@ class StreamHandler(BaseCallbackHandler):
 
 def get_municipal_context(vector_store, query):
     """
-    Obtiene y formatea el contexto municipal relevante para una consulta
-    sobre Bogotá.
-    
-    Parameters:
-    vector_store: Vector store con los documentos indexados
-    query (str): La consulta del usuario
-    
-    Returns:
-    list: Lista de diccionarios con el contexto relevante formateado
+    Obtiene el contexto relevante de los documentos para una consulta.
     """
-    # Realizar búsqueda de similitud
     similar_docs = vector_store.similarity_search(query, k=3)
-    context = []
+    context_list = []
     
     for doc in similar_docs:
+        # Extraer información básica del documento
         content = doc.page_content
-        source = doc.metadata.get('source', 'Documento desconocido')
-        page = doc.metadata.get('page', 'N/A')
+        source = doc.metadata.get('source', 'Documento sin especificar')
         
-        # Identificar el tipo de documento
-        doc_type = 'OTRO'
-        if 'plan' in source.lower() or 'programa' in source.lower():
-            doc_type = 'PLAN'
-        elif 'densidad' in source.lower() or 'estudio' in source.lower():
-            doc_type = 'TECNICO'
-            
-        # Extraer referencias específicas según el tipo de documento
-        refs = []
-        if doc_type == 'PLAN':
-            # Buscar referencias a ejes, programas y proyectos
-            programs = re.findall(r'(?:Programa|Proyecto|Eje)\s+[\d\.\s]+[A-Za-z].*?(?=\n|$)', content)
-            refs.extend(programs)
-            
-            # Buscar metas o indicadores
-            metrics = re.findall(r'(?:Meta|Indicador):.*?(?=\n|$)', content)
-            refs.extend(metrics)
-            
-        elif doc_type == 'TECNICO':
-            # Buscar cifras y estadísticas
-            stats = re.findall(r'\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s+(?:habitantes|personas|viviendas)(?:/[a-zA-Z²]+)?', content)
-            refs.extend(stats)
-            
-        # Extraer datos cuantitativos relevantes
-        metrics = {}
-        numbers = re.findall(r'(\d+(?:\.\d+)?(?:%|\s+(?:habitantes|personas|viviendas))(?:/[a-zA-Z²]+)?)', content)
-        if numbers:
-            metrics['datos_relevantes'] = numbers[:3]  # Limitamos a los 3 primeros números
-            
-        # Formatear el contexto
-        context_item = {
-            'source': f"{source} (Pág. {page})",
-            'type': doc_type,
-            'content': content.strip(),
-            'refs': refs[:5],  # Limitamos a 5 referencias
-            'metrics': metrics
-        }
+        # Extraer datos cuantitativos
+        numbers = re.findall(r'(\d+(?:\.\d+)?(?:%|\s+(?:habitantes|personas|viviendas)))', content)
+        metrics = numbers[:3] if numbers else []
         
-        # Agregar metadata adicional si está disponible
-        if 'fecha' in doc.metadata:
-            context_item['date'] = doc.metadata['fecha']
-        if 'autor' in doc.metadata:
-            context_item['author'] = doc.metadata['autor']
+        # Extraer referencias a políticas, programas o indicadores
+        refs = re.findall(r'(?:Plan|Programa|Proyecto|Meta|Indicador)[\s:].*?(?=\n|$)', content)
         
-        context.append(context_item)
+        context_list.append({
+            'source': source,
+            'content': content[:300],  # Limitar longitud del contenido
+            'metrics': metrics,
+            'refs': refs[:3]  # Limitar número de referencias
+        })
     
-    return format_municipal_context(context)
+    return context_list
 
 SYSTEM_PROMPT = """
 Eres BogotAI, un asistente especializado para apoyar al equipo de la Alcaldía de Bogotá. Tu función es proporcionar información precisa y análisis basados en datos para apoyar la toma de decisiones.
@@ -337,7 +300,8 @@ Para cada consulta, estructura tu respuesta así:
 - Especifica cuando las recomendaciones sean preliminares
 - Sugiere la consulta con expertos cuando sea necesaria  
 - Si no tienes informacion sobre algo en especifico, responde con que no tienes suficiente informacion sobre eso o neesitas mas informacion sobre eso. 
-- SIEMPRE RESPONDE EN ESPAÑOL 
+- SIEMPRE RESPONDE EN ESPAÑOL  
+- Si te saludan "Hola BogotAI" o preguntan quien eres respondeles de manera concisas diciendo quien ers y en que puedes ayudarlos. 
 
 Recuerda: Tu rol es apoyar la toma de decisiones proporcionando información y análisis basado en evidencia, no tomar las decisiones finales.
 """
@@ -465,46 +429,38 @@ def format_simple_response(query_type, context):
     La respuesta debe ser directa y enfocada en responder la pregunta específica.
     """
 
-def format_municipal_context(context_items):
+def format_municipal_context(context_list):
     """
     Formatea el contexto municipal para presentación.
-    
-    Parameters:
-    context_items (list): Lista de items de contexto
-
-    Returns:
-    str: Contexto formateado
     """
-    formatted_context = []
+    if not isinstance(context_list, list):
+        return "No se encontró contexto relevante."
+        
+    formatted_parts = []
     
-    for item in context_items:
+    for item in context_list:
         # Formatear referencias
-        refs_text = ""
-        if item['refs']:
-            refs_text = "\n      • " + "\n      • ".join(item['refs'])
+        refs = item.get('refs', [])
+        refs_text = "\n• ".join(refs) if refs else "No hay referencias específicas"
         
         # Formatear métricas
-        metrics_text = ""
-        if item.get('metrics'):
-            metrics = item['metrics'].get('datos_relevantes', [])
-            if metrics:
-                metrics_text = "\n      • " + "\n      • ".join(metrics)
+        metrics = item.get('metrics', [])
+        metrics_text = "\n• ".join(metrics) if metrics else "No hay datos cuantitativos específicos"
         
-        # Construir bloque de contexto
-        context_block = f"""
-        📚 Fuente: {item['source']}
-        
-        📊 Datos clave:{metrics_text if metrics_text else '\n      No hay datos cuantitativos específicos'}
-        
-        📋 Referencias:{refs_text if refs_text else '\n      No se encontraron referencias específicas'}
-        
-        💡 Contexto relevante:
-        {item['content'][:300]}...
-        """
-        
-        formatted_context.append(context_block)
+        section = f"""
+📚 Fuente: {item['source']}
+
+📊 Datos clave:
+• {metrics_text}
+
+📋 Referencias:
+• {refs_text}
+
+💡 Contexto relevante:
+{item['content']}"""
+        formatted_parts.append(section)
     
-    return "\n---\n".join(formatted_context)
+    return "\n---\n".join(formatted_parts)
 
 def detect_query_type(prompt):
     """
@@ -581,43 +537,72 @@ def detect_query_type(prompt):
             return category
     return 'GENERAL'
 
+def format_context_string(context_list):
+    """
+    Formatea la lista de contextos en un string estructurado.
+    """
+    if not context_list:
+        return "No se encontró contexto relevante."
+        
+    formatted_parts = []
+    
+    for item in context_list:
+        section = f"""
+📚 Fuente: {item['source']}
+
+📊 Datos relevantes:
+{format_metrics(item.get('metrics', []))}
+
+📋 Referencias:
+{format_references(item.get('refs', []))}
+
+💡 Contexto:
+{item['content']}"""
+        formatted_parts.append(section)
+    
+    return "\n---\n".join(formatted_parts)
+
+def format_metrics(metrics):
+    if not metrics:
+        return "• No hay datos cuantitativos específicos"
+    return "\n".join(f"• {metric}" for metric in metrics)
+
+def format_references(refs):
+    if not refs:
+        return "• No hay referencias específicas"
+    return "\n".join(f"• {ref}" for ref in refs)
+
 def get_chat_response(prompt, vector_store, temperature=0.3):
     """Genera respuesta considerando el contexto municipal y el formato apropiado"""
     try:
         response_placeholder = st.empty()
         stream_handler = StreamHandler(response_placeholder)
         
-        # 1. Detectar el tipo de consulta
+        # 1. Detectar tipo de consulta
         query_type = detect_query_type(prompt)
         
-        # 2. Detectar formato de respuesta
-        response_format = detect_response_format(prompt)
+        # 2. Obtener y formatear contexto
+        context_items = get_municipal_context(vector_store, prompt)
+        formatted_context = format_context_string(context_items)
         
-        # 3. Obtener contexto relevante
-        municipal_context = get_municipal_context(vector_store, prompt)
+        # 3. Construir prompt mejorado
+        enhanced_prompt = f"""
+Tipo de consulta: {query_type}
+
+Contexto relevante:
+{formatted_context}
+
+Por favor proporciona una respuesta que:
+1. Use la información del contexto proporcionado
+2. Cite las fuentes específicas cuando sea posible
+3. Destaque datos cuantitativos relevantes
+4. Proporcione recomendaciones basadas en evidencia
+"""
         
-        # 4. Formatear el prompt según el tipo de respuesta
-        if response_format == 'SIMPLE':
-            enhanced_prompt = f"""
-            Consulta de tipo: {query_type}
-            
-            Contexto relevante:
-            {format_municipal_context(municipal_context)}
-            
-            Por favor proporciona una respuesta directa y concisa, enfocándote en:
-            • La información principal solicitada
-            • El contexto esencial
-            • La fuente de la información
-            """
-        else:
-            enhanced_prompt = format_structured_response(query_type, format_municipal_context(municipal_context))
-        
-        # 5. Ajustar temperatura según el formato
-        adjusted_temperature = 0.3 if response_format == 'STRUCTURED' else 0.7
-        
+        # 4. Generar respuesta
         chat_model = ChatOpenAI(
             model="gpt-4",
-            temperature=adjusted_temperature,
+            temperature=temperature,
             api_key=API_KEY,
             streaming=True,
             callbacks=[stream_handler]
@@ -649,20 +634,20 @@ def main():
 
     st.write(logo, unsafe_allow_html=True)
     st.title("BogotAI", anchor=False)
-    st.markdown("**Asistente virtual para gestión municipal y administración pública**")
+    st.markdown("##### Asistente para la toma de decisiones de política pública")
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
     with st.sidebar:
         st.markdown("""
-        **Sistema de Gestión Municipal**
+        ## Sistema de Gestión Pública Bogotá
         
-        Tipos de consultas:
-        - Planes y proyectos
-        - Gestión administrativa
-        - Procedimientos internos
-        - Control y seguimiento
+        **Tipos de consultas:**
+        - Planificación y diseño de Políticas Públicas 
+        - Análisis de problemas sociales 
+        - Evaluación de escenarios 
+        - Identificación de patrones y tendencias 
         """)
         
     for message in st.session_state.messages:
