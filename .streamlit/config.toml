@@ -1,0 +1,7 @@
+[theme]
+
+primaryColor = "#daab34"
+backgroundColor = "#f2e9e9"
+# Start of Selection
+secondaryBackgroundColor = "#f6e8c22"
+textColor = "#000000"
