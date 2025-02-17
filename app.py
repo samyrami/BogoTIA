@@ -601,7 +601,7 @@ Por favor proporciona una respuesta que:
         
         # 4. Generar respuesta
         chat_model = ChatOpenAI(
-            model="gpt-4",
+            model="gpt-4o",
             temperature=temperature,
             api_key=API_KEY,
             streaming=True,
