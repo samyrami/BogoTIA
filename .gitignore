@@ -7,7 +7,6 @@ env/
 
 # Environment variables
 .env
-faiss_index/
 data/
 data.zip
 # Streamlit
